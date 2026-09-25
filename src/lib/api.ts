@@ -4,10 +4,11 @@
 import axios from 'axios'
 
 const HOSTNAME = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost'
+const PAGE_PROTOCOL = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https:' : 'http:'
 
-export const BASE_URL = `http://${HOSTNAME}:8000`
-export const API_URL = `${BASE_URL}/api/v1`
-export const WS_URL = `ws://${HOSTNAME}:8000`
+export const BASE_URL = `${PAGE_PROTOCOL}//${HOSTNAME}:8000`
+export const API_URL = (import.meta.env.VITE_API_URL || `${BASE_URL}/api/v1`).replace(/\/$/, '')
+export const WS_URL = import.meta.env.VITE_WS_URL || BASE_URL.replace(/^http/, 'ws')
 
 
 const api = axios.create({
@@ -136,7 +137,7 @@ export function getApiErrorMessage(err: unknown): string {
 
 // ─── Word Sets & Words ────────────────────────────────────────────────────────
 export interface Word { id: number; term: string; definition: string; example?: string; word_set_id: number }
-export interface WordSet { id: number; title: string; description?: string; creator_id?: number; words: Word[] }
+export interface WordSet { id: number; title: string; description?: string; creator_id?: number; word_count?: number; words?: Word[] }
 export interface WordSetCreate { title: string; description?: string; words: { term: string; definition: string; example?: string }[] }
 
 export const wordApi = {
@@ -155,7 +156,7 @@ export interface RoomPlayer {
   score: number
   is_ready: boolean
   joined_at?: string
-  user?: UserInfo
+  user?: { username: string }
 }
 export interface Room {
   id: number
@@ -172,6 +173,7 @@ export const roomApi = {
   create: (word_set_id: number) => api.post<{ data: Room }>('/rooms', { word_set_id }),
   join: (code: string) => api.post<{ data: Room }>(`/rooms/${code}/join`),
   get: (code: string) => api.get<{ data: Room }>(`/rooms/${code}`),
+  gameState: (code: string) => api.get<{ data: Record<string, unknown> }>(`/rooms/${code}/game-state`),
   ready: (code: string) => api.post<{ data: { is_ready: boolean } }>(`/rooms/${code}/ready`),
   start: (code: string) => api.post<{ data: unknown }>(`/rooms/${code}/start`),
   submit: (code: string, word_id: number, submitted_answer: string) =>

@@ -13,6 +13,7 @@ export function useRoomSocket({ code, token, onMessage }: UseRoomSocketOptions) 
   const wsRef = useRef<WebSocket | null>(null)
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [reconnecting, setReconnecting] = useState(false)
   const onMessageRef = useRef(onMessage)
 
   useEffect(() => {
@@ -22,37 +23,57 @@ export function useRoomSocket({ code, token, onMessage }: UseRoomSocketOptions) 
   useEffect(() => {
     if (!code) return
 
-    const url = token
-      ? `${WS_URL}/ws/${code}?token=${token}`
-      : `${WS_URL}/ws/${code}`
+    let disposed = false
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let stableTimer: ReturnType<typeof setTimeout> | null = null
+    let attempts = 0
+    let socket: WebSocket | null = null
 
-    const ws = new WebSocket(url)
-    wsRef.current = ws
+    const connect = () => {
+      if (disposed) return
+      const protocols = token ? ['wordduel', `bearer.${token}`] : ['wordduel']
+      socket = new WebSocket(`${WS_URL}/ws/${encodeURIComponent(code)}`, protocols)
+      wsRef.current = socket
 
-    ws.onopen = () => {
-      setConnected(true)
-      setError(null)
-    }
+      socket.onopen = () => {
+        if (disposed) return
+        setConnected(true)
+        setReconnecting(false)
+        setError(null)
+        stableTimer = setTimeout(() => { attempts = 0 }, 10_000)
+      }
 
-    ws.onmessage = (evt) => {
-      try {
-        const msg = JSON.parse(evt.data) as WsMessage
-        onMessageRef.current(msg)
-      } catch {
-        // ignore parse errors
+      socket.onmessage = (event) => {
+        try {
+          onMessageRef.current(JSON.parse(event.data) as WsMessage)
+        } catch {
+          // Ignore messages that are not valid JSON objects.
+        }
+      }
+
+      socket.onerror = () => {
+        if (!disposed) setError('Mất kết nối WebSocket')
+      }
+
+      socket.onclose = () => {
+        if (stableTimer) clearTimeout(stableTimer)
+        if (disposed) return
+        setConnected(false)
+        setReconnecting(true)
+        attempts += 1
+        const backoffMs = Math.min(500 * (2 ** Math.min(attempts - 1, 6)), 30_000)
+        const jitterMs = Math.floor(Math.random() * 250)
+        retryTimer = setTimeout(connect, backoffMs + jitterMs)
       }
     }
 
-    ws.onerror = () => {
-      setError('Mất kết nối WebSocket')
-    }
-
-    ws.onclose = () => {
-      setConnected(false)
-    }
-
+    connect()
     return () => {
-      ws.close()
+      disposed = true
+      if (retryTimer) clearTimeout(retryTimer)
+      if (stableTimer) clearTimeout(stableTimer)
+      socket?.close()
+      if (wsRef.current === socket) wsRef.current = null
     }
   }, [code, token])
 
@@ -62,5 +83,5 @@ export function useRoomSocket({ code, token, onMessage }: UseRoomSocketOptions) 
     }
   }, [])
 
-  return { connected, error, send }
+  return { connected, error, reconnecting, send }
 }

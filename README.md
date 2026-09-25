@@ -30,3 +30,6 @@ If you are developing a production application, we recommend enabling type-aware
 ```
 
 See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+# Environment URLs
+
+Set `VITE_API_URL` to the full backend API base, including `/api/v1`, and set `VITE_WS_URL` to the backend WebSocket origin. The defaults use the current page's hostname and choose HTTPS/WSS when the frontend is served over HTTPS. See `.env.example` for a deployment example.

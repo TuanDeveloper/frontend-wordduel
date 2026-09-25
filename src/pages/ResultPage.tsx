@@ -22,34 +22,40 @@ export default function ResultPage() {
 
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
   const [winner, setWinner] = useState<{ username: string; user_id: number } | null>(null)
-  const [loading, setLoading] = useState(!stateData)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (stateData?.leaderboard && Array.isArray(stateData.leaderboard)) {
       setLeaderboard(stateData.leaderboard as LeaderboardEntry[])
-      setWinner({
-        username: stateData.winner_username as string,
-        user_id: stateData.winner_user_id as number,
-      })
+      if (typeof stateData.winner_username === 'string' && typeof stateData.winner_user_id === 'number') {
+        setWinner({ username: stateData.winner_username, user_id: stateData.winner_user_id })
+      }
       setLoading(false)
       return
     }
-    // Fallback: fetch room data
+    let active = true
     if (code) {
-      roomApi.get(code).then((res) => {
-        const sorted = [...res.data.data.players]
-          .sort((a, b) => b.score - a.score)
-          .map((p, i) => ({
-            rank: i + 1,
-            user_id: p.user_id,
-            username: p.user?.username ?? `Player ${p.user_id}`,
-            score: p.score,
-          }))
-        setLeaderboard(sorted)
-        if (sorted.length > 0) setWinner({ username: sorted[0].username, user_id: sorted[0].user_id })
-      }).finally(() => setLoading(false))
+      roomApi.gameState(code).then((res) => {
+        if (!active) return
+        const state = res.data.data
+        if (state.event === 'game_finished' && Array.isArray(state.leaderboard)) {
+          setLeaderboard(state.leaderboard as LeaderboardEntry[])
+          if (typeof state.winner_username === 'string' && typeof state.winner_user_id === 'number') {
+            setWinner({ username: state.winner_username, user_id: state.winner_user_id })
+          }
+        } else if (state.event === 'game_started') {
+          navigate(`/game/${code}`, { replace: true })
+        } else {
+          navigate(`/room/${code}`, { replace: true })
+        }
+      }).catch(() => {
+        if (active) navigate('/dashboard', { replace: true })
+      }).finally(() => {
+        if (active) setLoading(false)
+      })
     }
-  }, [code, stateData])
+    return () => { active = false }
+  }, [code, navigate, stateData])
 
   const myEntry = leaderboard.find((e) => e.user_id === user?.id)
   const isWinner = winner?.user_id === user?.id

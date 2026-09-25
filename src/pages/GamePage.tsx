@@ -1,14 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams, useNavigate, useLocation } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { roomApi } from '../lib/api'
 import { useRoomSocket, type WsMessage } from '../hooks/useRoomSocket'
 
 interface WordData {
   id: number
-  term: string
   definition: string
-  example?: string
 }
 
 interface PlayerProgress {
@@ -21,36 +19,71 @@ interface PlayerProgress {
 
 type GamePhase = 'playing' | 'answered' | 'finished'
 
-// Bài hỏi: cho definition → nhập term
-function buildQuestion(word: WordData): { prompt: string; answer: string } {
-  return { prompt: word.definition, answer: word.term.toLowerCase().trim() }
-}
-
 export default function GamePage() {
   const { code } = useParams<{ code: string }>()
   const { user, token } = useAuth()
   const navigate = useNavigate()
-  const location = useLocation()
 
-  // Words từ game_started event
   const [words, setWords] = useState<WordData[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
+  const [answeredWordIds, setAnsweredWordIds] = useState<number[]>([])
+  const [isHost, setIsHost] = useState(false)
+  const [gameLoaded, setGameLoaded] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [answer, setAnswer] = useState('')
   const [phase, setPhase] = useState<GamePhase>('playing')
   const [lastResult, setLastResult] = useState<{ correct: boolean; correctAnswer: string } | null>(null)
   const [playersProgress, setPlayersProgress] = useState<PlayerProgress[]>([])
   const [submitLoading, setSubmitLoading] = useState(false)
   const [timeLeft, setTimeLeft] = useState(20)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const hasConnectedRef = useRef(false)
+  const disconnectedRef = useRef(false)
 
-  // Load initial game data từ navigation state hoặc fetch
+  // Always fetch member-scoped state so a refresh can resume the current game.
   useEffect(() => {
-    const stateData = location.state as WsMessage | null
-    if (stateData?.words && Array.isArray(stateData.words)) {
-      setWords(stateData.words as WordData[])
-    }
-  }, [location.state])
+    if (!code) return
+    let active = true
+    roomApi.gameState(code).then((response) => {
+      if (!active) return
+      const state = response.data.data
+      if (state.event === 'game_waiting') {
+        navigate(`/room/${code}`, { replace: true })
+        return
+      }
+      if (state.event === 'game_finished') {
+        navigate(`/result/${code}`, { replace: true, state })
+        return
+      }
+      if (!Array.isArray(state.words)) {
+        throw new Error('Không nhận được dữ liệu câu hỏi')
+      }
+      const gameWords = state.words as WordData[]
+      const answered = Array.isArray(state.answered_word_ids)
+        ? state.answered_word_ids.filter((id): id is number => typeof id === 'number')
+        : []
+      const firstUnanswered = gameWords.findIndex((word) => !answered.includes(word.id))
+      setWords(gameWords)
+      setAnsweredWordIds(answered)
+      setCurrentIndex(firstUnanswered < 0 ? gameWords.length : firstUnanswered)
+      setPlayersProgress(Array.isArray(state.players) ? state.players as PlayerProgress[] : [])
+      setIsHost(state.host_id === user?.id)
+      setPhase(firstUnanswered < 0 ? 'finished' : 'playing')
+      setGameLoaded(true)
+      if (firstUnanswered < 0 && state.host_id === user?.id) {
+        roomApi.finish(code).then((finishResponse) => {
+          if (active) navigate(`/result/${code}`, { replace: true, state: finishResponse.data.data })
+        }).catch(() => {
+          if (active) setSubmitError('Chưa thể kết thúc trận đấu. Hãy thử lại khi đã kết nối.')
+        })
+      }
+    }).catch(() => {
+      if (active) setLoadError('Không thể tải trạng thái trận đấu. Hãy thử tải lại hoặc về phòng chờ.')
+    })
+    return () => { active = false }
+  }, [code, navigate, user?.id])
 
   // Timer countdown
   useEffect(() => {
@@ -81,7 +114,34 @@ export default function GamePage() {
     }
   }, [code, navigate])
 
-  const { connected } = useRoomSocket({ code: code!, token, onMessage: handleMessage })
+  const { connected, reconnecting, error: socketError } = useRoomSocket({ code: code!, token, onMessage: handleMessage })
+
+  useEffect(() => {
+    if (!connected) {
+      if (hasConnectedRef.current) disconnectedRef.current = true
+      return
+    }
+    if (hasConnectedRef.current && disconnectedRef.current && gameLoaded && code) {
+      roomApi.gameState(code).then((response) => {
+        const state = response.data.data
+        if (state.event === 'game_finished') {
+          navigate(`/result/${code}`, { replace: true, state })
+        } else if (state.event === 'game_waiting') {
+          navigate(`/room/${code}`, { replace: true })
+        } else if (Array.isArray(state.players)) {
+          setPlayersProgress(state.players as PlayerProgress[])
+          if (Array.isArray(state.answered_word_ids)) {
+            const answered = state.answered_word_ids.filter((id): id is number => typeof id === 'number')
+            setAnsweredWordIds(answered)
+            const nextIndex = words.findIndex((word) => !answered.includes(word.id))
+            if (nextIndex >= 0 && nextIndex !== currentIndex && phase === 'playing') setCurrentIndex(nextIndex)
+          }
+        }
+      }).catch(() => setLoadError('Kết nối bị gián đoạn. Hãy tải lại trạng thái trận đấu.'))
+    }
+    hasConnectedRef.current = true
+    disconnectedRef.current = false
+  }, [connected, gameLoaded, code, navigate, words, currentIndex, phase])
 
   const handleSubmit = async (overrideAnswer?: string, isTimeout = false) => {
     if (phase === 'answered' || submitLoading) return
@@ -90,33 +150,42 @@ export default function GamePage() {
 
     const submitted = overrideAnswer !== undefined ? overrideAnswer : answer
     setSubmitLoading(true)
+    setSubmitError(null)
     if (timerRef.current) clearInterval(timerRef.current)
 
     try {
-      await roomApi.submit(code!, currentWord.id, submitted)
-      const { answer: correctAnswer } = buildQuestion(currentWord)
-      const isCorrect = submitted.toLowerCase().trim() === correctAnswer
-      setLastResult({ correct: isCorrect, correctAnswer: currentWord.term })
+      const response = await roomApi.submit(code!, currentWord.id, submitted)
+      const feedback = response.data.data as { is_correct: boolean; correct_answer: string; players?: PlayerProgress[] }
+      if (Array.isArray(feedback.players)) setPlayersProgress(feedback.players)
+      setAnsweredWordIds((current) => [...new Set([...current, currentWord.id])])
+      setLastResult({ correct: feedback.is_correct, correctAnswer: feedback.correct_answer })
       setPhase('answered')
     } catch {
-      if (!isTimeout) {
-        setLastResult({ correct: false, correctAnswer: currentWord.term })
-        setPhase('answered')
-      }
+      setSubmitError(isTimeout
+        ? 'Không gửi được câu trả lời khi hết giờ. Hãy kiểm tra kết nối rồi nộp lại.'
+        : 'Chưa gửi được câu trả lời. Kiểm tra kết nối rồi thử lại.')
     } finally {
       setSubmitLoading(false)
     }
   }
 
-  const nextQuestion = () => {
+  const nextQuestion = async () => {
     setAnswer('')
     setLastResult(null)
-    if (currentIndex + 1 >= words.length) {
-      // Kết thúc - gửi finish
-      roomApi.finish(code!).catch(() => {})
+    setSubmitError(null)
+    const nextIndex = words.findIndex((word, index) => index > currentIndex && !answeredWordIds.includes(word.id))
+    if (nextIndex < 0) {
       setPhase('finished')
+      if (isHost) {
+        try {
+          const response = await roomApi.finish(code!)
+          navigate(`/result/${code}`, { state: response.data.data })
+        } catch {
+          setSubmitError('Chưa thể kết thúc trận đấu. Hãy thử lại khi đã kết nối.')
+        }
+      }
     } else {
-      setCurrentIndex((i) => i + 1)
+      setCurrentIndex(nextIndex)
       setPhase('playing')
       setTimeout(() => inputRef.current?.focus(), 100)
     }
@@ -126,7 +195,16 @@ export default function GamePage() {
   const progress = words.length > 0 ? ((currentIndex) / words.length) * 100 : 0
   const myProgress = playersProgress.find((p) => p.user_id === user?.id)
 
-  if (words.length === 0) {
+  if (loadError) {
+    return (
+      <div className="page-center" style={{ flexDirection: 'column', gap: '16px' }}>
+        <p style={{ color: 'var(--text-secondary)' }}>{loadError}</p>
+        <button className="btn btn-secondary" onClick={() => navigate(`/room/${code}`)}>Về phòng chờ</button>
+      </div>
+    )
+  }
+
+  if (!gameLoaded || words.length === 0) {
     return (
       <div className="page-center" style={{ flexDirection: 'column', gap: '16px' }}>
         <span className="spinner" style={{ width: '40px', height: '40px' }} />
@@ -139,7 +217,18 @@ export default function GamePage() {
     return (
       <div className="page-center" style={{ flexDirection: 'column', gap: '24px' }}>
         <div style={{ fontSize: '64px' }}>⏳</div>
-        <p className="font-display" style={{ fontSize: '24px', fontWeight: 700 }}>Đang tính kết quả...</p>
+        <p className="font-display" style={{ fontSize: '24px', fontWeight: 700 }}>
+          {isHost ? 'Đang tính kết quả...' : 'Đang chờ chủ phòng kết thúc trận...'}
+        </p>
+        {submitError && <p role="alert" style={{ color: 'var(--red)' }}>{submitError}</p>}
+        {isHost && submitError && (
+          <button
+            className="btn btn-primary"
+            onClick={() => roomApi.finish(code!).then((response) => navigate(`/result/${code}`, { state: response.data.data }))}
+          >
+            Thử kết thúc lại
+          </button>
+        )}
         <span className="spinner" style={{ width: '32px', height: '32px' }} />
       </div>
     )
@@ -180,12 +269,9 @@ export default function GamePage() {
             {timeLeft}
           </div>
 
-          {/* WS dot */}
-          <span style={{
-            width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
-            background: connected ? 'var(--green)' : 'var(--red)',
-            boxShadow: connected ? '0 0 8px var(--green)' : 'none',
-          }} />
+          <span style={{ color: connected ? 'var(--green)' : 'var(--red)', fontSize: '12px', whiteSpace: 'nowrap' }}>
+            {connected ? 'Kết nối ổn định' : reconnecting ? 'Đang kết nối lại...' : socketError ?? 'Mất kết nối'}
+          </span>
         </div>
       </div>
 
@@ -233,12 +319,6 @@ export default function GamePage() {
             "{currentWord?.definition}"
           </div>
 
-          {currentWord?.example && (
-            <p style={{ color: 'var(--text-secondary)', fontSize: '15px', fontStyle: 'italic', marginTop: '8px' }}>
-              Ví dụ: {currentWord.example}
-            </p>
-          )}
-
           {/* Result Feedback */}
           {phase === 'answered' && lastResult && (
             <div style={{ marginTop: '28px', textAlign: 'center' }}>
@@ -262,29 +342,32 @@ export default function GamePage() {
 
         {/* Answer Input / Next */}
         {phase === 'playing' ? (
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <input
-              ref={inputRef}
-              className="form-input"
-              id="answer-input"
-              placeholder="Nhập từ tiếng Anh..."
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-              autoFocus
-              disabled={submitLoading}
-              style={{ flex: 1, fontSize: '18px', fontWeight: 500 }}
-            />
-            <button
-              id="btn-submit-answer"
-              className="btn btn-primary"
-              onClick={() => handleSubmit()}
-              disabled={submitLoading || !answer.trim()}
-              style={{ padding: '12px 28px', fontSize: '16px' }}
-            >
-              {submitLoading ? <span className="spinner" /> : '→ Nộp'}
-            </button>
-          </div>
+          <>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <input
+                ref={inputRef}
+                className="form-input"
+                id="answer-input"
+                placeholder="Nhập từ tiếng Anh..."
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+                autoFocus
+                disabled={submitLoading}
+                style={{ flex: 1, fontSize: '18px', fontWeight: 500 }}
+              />
+              <button
+                id="btn-submit-answer"
+                className="btn btn-primary"
+                onClick={() => handleSubmit()}
+                disabled={submitLoading || !answer.trim()}
+                style={{ padding: '12px 28px', fontSize: '16px' }}
+              >
+                {submitLoading ? <span className="spinner" /> : '→ Nộp'}
+              </button>
+            </div>
+            {submitError && <p role="alert" style={{ color: 'var(--red)', marginTop: '10px' }}>{submitError}</p>}
+          </>
         ) : (
           <button
             id="btn-next-question"

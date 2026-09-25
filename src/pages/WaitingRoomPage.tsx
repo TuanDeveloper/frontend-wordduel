@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { roomApi, type Room, type RoomPlayer } from '../lib/api'
@@ -16,6 +16,8 @@ export default function WaitingRoomPage() {
   const [loading, setLoading] = useState(true)
   const [startLoading, setStartLoading] = useState(false)
   const [copied, setCopied] = useState(false)
+  const hasConnectedRef = useRef(false)
+  const disconnectedRef = useRef(false)
 
   const isHost = room?.host_id === user?.id
 
@@ -23,6 +25,15 @@ export default function WaitingRoomPage() {
   useEffect(() => {
     if (!code) return
     roomApi.get(code).then((res) => {
+      if (res.data.data.status === 'playing') {
+        navigate(`/game/${code}`, { replace: true })
+        return
+      }
+      if (res.data.data.status === 'finished') {
+        return roomApi.gameState(code).then((game) => {
+          navigate(`/result/${code}`, { replace: true, state: game.data.data })
+        })
+      }
       setRoom(res.data.data)
       setPlayers(res.data.data.players)
       const me = res.data.data.players.find((p) => p.user_id === user?.id)
@@ -49,11 +60,33 @@ export default function WaitingRoomPage() {
       if (msg.user_id === user?.id) setMyReady(msg.is_ready as boolean)
     }
     if (event === 'game_started') {
-      navigate(`/game/${code}`, { state: msg })
+      navigate(`/game/${code}`)
     }
   }, [code, navigate, user?.id])
 
-  const { connected, send } = useRoomSocket({ code: code!, token, onMessage: handleMessage })
+  const { connected, reconnecting, error: socketError, send } = useRoomSocket({ code: code!, token, onMessage: handleMessage })
+
+  useEffect(() => {
+    if (!connected) {
+      if (hasConnectedRef.current) disconnectedRef.current = true
+      return
+    }
+    if (hasConnectedRef.current && disconnectedRef.current && code) {
+      roomApi.get(code).then((response) => {
+        const currentRoom = response.data.data
+        setRoom(currentRoom)
+        setPlayers(currentRoom.players)
+        const me = currentRoom.players.find((player) => player.user_id === user?.id)
+        if (me) setMyReady(me.is_ready)
+        if (currentRoom.status === 'playing') navigate(`/game/${code}`, { replace: true })
+        if (currentRoom.status === 'finished') {
+          roomApi.gameState(code).then((game) => navigate(`/result/${code}`, { replace: true, state: game.data.data }))
+        }
+      }).catch(() => navigate('/dashboard'))
+    }
+    hasConnectedRef.current = true
+    disconnectedRef.current = false
+  }, [connected, code, navigate, user?.id])
 
   const handleReady = async () => {
     try {
@@ -70,6 +103,7 @@ export default function WaitingRoomPage() {
     setStartLoading(true)
     try {
       await roomApi.start(code!)
+      navigate(`/game/${code}`)
     } catch {
       send({ event: 'start' })
     } finally {
@@ -141,7 +175,7 @@ export default function WaitingRoomPage() {
                 boxShadow: connected ? '0 0 8px var(--green)' : 'none',
                 animation: connected ? 'pulse-glow 2s infinite' : 'none',
               }} />
-              {connected ? 'Đã kết nối real-time' : 'Đang kết nối...'}
+              {connected ? 'Đã kết nối real-time' : reconnecting ? 'Đang kết nối lại...' : socketError ?? 'Mất kết nối'}
             </span>
           </div>
         </div>

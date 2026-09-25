@@ -156,7 +156,7 @@ export default function DashboardPage() {
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                     <h3 style={{ fontSize: '16px', fontWeight: 700, flex: 1 }}>{ws.title}</h3>
-                    <span className="badge badge-purple">{ws.words.length} từ</span>
+                    <span className="badge badge-purple">{ws.word_count ?? ws.words?.length ?? 0} từ</span>
                   </div>
                   {ws.description && (
                     <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '16px' }}>{ws.description}</p>
