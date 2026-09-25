@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { wordApi, roomApi, type WordSet } from '../lib/api'
+import { wordApi, roomApi, soloApi, type GameSettings, type WordSet } from '../lib/api'
 import Navbar from '../components/Navbar'
+import ImportWordSetModal from '../components/ImportWordSetModal'
+import GameSettingsModal from '../components/GameSettingsModal'
 
 export default function DashboardPage() {
   const { user } = useAuth()
@@ -11,6 +13,8 @@ export default function DashboardPage() {
   const [wordSets, setWordSets] = useState<WordSet[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const [settingsTarget, setSettingsTarget] = useState<{ mode: 'duel' | 'solo'; wordSet: WordSet } | null>(null)
   const [showJoin, setShowJoin] = useState(false)
   const [joinCode, setJoinCode] = useState('')
   const [joinLoading, setJoinLoading] = useState(false)
@@ -31,10 +35,16 @@ export default function DashboardPage() {
     fetchWordSets()
   }, [fetchWordSets])
 
-  const handleCreateRoom = async (wordSetId: number) => {
+  const handleStartGame = async (mode: 'duel' | 'solo', wordSetId: number, settings: GameSettings) => {
     try {
-      const res = await roomApi.create(wordSetId)
-      navigate(`/room/${res.data.data.code}`)
+      if (mode === 'duel') {
+        const res = await roomApi.create(wordSetId, settings)
+        navigate(`/room/${res.data.data.code}`)
+      } else {
+        const res = await soloApi.start({ source: 'word_set', word_set_id: wordSetId, ...settings })
+        const session = res.data.data as { session_id: number }
+        navigate(`/solo/${session.session_id}`, { state: res.data.data })
+      }
     } catch (err: unknown) {
       alert((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Không thể tạo phòng')
     }
@@ -131,6 +141,11 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '-32px', marginBottom: '20px' }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => navigate('/library')}>⭐ Thư viện cá nhân</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => setShowImport(true)}>⬆ Import từ Excel / CSV</button>
+        </div>
+
         {/* Word Sets */}
         <div>
           <h2 className="font-display" style={{ fontSize: '22px', fontWeight: 700, marginBottom: '20px' }}>
@@ -165,9 +180,12 @@ export default function DashboardPage() {
                     <button
                       className="btn btn-primary btn-sm"
                       style={{ flex: 1 }}
-                      onClick={() => handleCreateRoom(ws.id)}
+                      onClick={() => setSettingsTarget({ mode: 'duel', wordSet: ws })}
                     >
                       🎮 Tạo phòng
+                    </button>
+                    <button className="btn btn-teal btn-sm" onClick={() => setSettingsTarget({ mode: 'solo', wordSet: ws })}>
+                      Luyện solo
                     </button>
                     <button
                       className="btn btn-danger btn-sm"
@@ -220,6 +238,15 @@ export default function DashboardPage() {
           onCreated={() => { setShowCreate(false); fetchWordSets() }}
         />
       )}
+      {showImport && <ImportWordSetModal onClose={() => setShowImport(false)} onCreated={() => { setShowImport(false); fetchWordSets() }} />}
+      {settingsTarget && (
+        <GameSettingsModal
+          mode={settingsTarget.mode}
+          wordSet={settingsTarget.wordSet}
+          onClose={() => setSettingsTarget(null)}
+          onStart={(settings) => handleStartGame(settingsTarget.mode, settingsTarget.wordSet.id, settings)}
+        />
+      )}
     </div>
   )
 }
@@ -247,11 +274,11 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 function CreateWordSetModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [words, setWords] = useState([{ term: '', definition: '', example: '' }])
+  const [words, setWords] = useState([{ term: '', definition: '', example: '', context_sentence: '' }])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const addWord = () => setWords([...words, { term: '', definition: '', example: '' }])
+  const addWord = () => setWords([...words, { term: '', definition: '', example: '', context_sentence: '' }])
   const removeWord = (i: number) => setWords(words.filter((_, idx) => idx !== i))
   const updateWord = (i: number, field: string, val: string) =>
     setWords(words.map((w, idx) => (idx === i ? { ...w, [field]: val } : w)))
@@ -310,6 +337,7 @@ function CreateWordSetModal({ onClose, onCreated }: { onClose: () => void; onCre
                   <input className="form-input" placeholder="Từ (term)" value={w.term} onChange={(e) => updateWord(i, 'term', e.target.value)} style={{ fontSize: '14px' }} />
                   <input className="form-input" placeholder="Nghĩa (definition)" value={w.definition} onChange={(e) => updateWord(i, 'definition', e.target.value)} style={{ fontSize: '14px' }} />
                   <input className="form-input" placeholder="Ví dụ (tùy chọn)" value={w.example} onChange={(e) => updateWord(i, 'example', e.target.value)} style={{ fontSize: '14px', gridColumn: '1 / -1' }} />
+                  <textarea className="form-input form-textarea" placeholder="Câu ngữ cảnh (tùy chọn)" value={w.context_sentence} onChange={(e) => updateWord(i, 'context_sentence', e.target.value)} style={{ fontSize: '14px', gridColumn: '1 / -1' }} />
                 </div>
                 {words.length > 1 && (
                   <button type="button" onClick={() => removeWord(i)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: '16px', padding: '10px 4px' }}>✕</button>

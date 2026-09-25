@@ -20,6 +20,8 @@ export default function Navbar() {
         <div className="navbar-actions">
           {user && (
             <>
+              <Link to="/library" className="navbar-link">Thư viện</Link>
+              {user.role === 'admin' && <Link to="/admin" className="navbar-link">Quản trị</Link>}
               <div style={{
                 display: 'flex', alignItems: 'center', gap: '8px',
                 padding: '8px 16px', background: 'var(--bg-700)',

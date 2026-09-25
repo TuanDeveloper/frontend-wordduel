@@ -50,7 +50,9 @@ export default function WaitingRoomPage() {
         // Server gửi kèm players list
         setPlayers(msg.players as RoomPlayer[])
       }
+      if (typeof msg.host_id === 'number') setRoom((current) => current ? { ...current, host_id: msg.host_id as number } : current)
     }
+    if (event === 'room_closed') navigate('/dashboard', { replace: true })
     if (event === 'player_ready') {
       setPlayers((prev) =>
         prev.map((p) =>
@@ -108,6 +110,16 @@ export default function WaitingRoomPage() {
       send({ event: 'start' })
     } finally {
       setStartLoading(false)
+    }
+  }
+
+  const handleLeave = async () => {
+    if (!window.confirm('Bạn muốn rời phòng chờ này?')) return
+    try {
+      await roomApi.leave(code!)
+      navigate('/dashboard', { replace: true })
+    } catch {
+      navigate('/dashboard', { replace: true })
     }
   }
 
@@ -239,6 +251,11 @@ export default function WaitingRoomPage() {
           </div>
         </div>
 
+        <div className="card room-settings-summary">
+          <span className="eyebrow">CÀI ĐẶT VÁN ĐẤU</span>
+          <div><span>{room?.word_count ? `${room.word_count} từ được chọn` : 'Toàn bộ từ trong bộ'}</span><span>{room?.question_count ?? room?.word_count ?? '—'} câu hỏi</span><span>{room?.time_per_question ? `${room.time_per_question} giây / câu` : 'Không giới hạn thời gian'}</span></div>
+        </div>
+
         {/* Actions */}
         <div className="animate-fade-up" style={{ display: 'flex', gap: '12px', animationDelay: '0.2s' }}>
           <button
@@ -261,6 +278,7 @@ export default function WaitingRoomPage() {
               {startLoading ? <span className="spinner" /> : '🚀 Bắt đầu'}
             </button>
           )}
+          <button className="btn btn-danger" onClick={() => void handleLeave()}>Rời phòng</button>
         </div>
 
         {isHost && !allReady && players.length >= 2 && (

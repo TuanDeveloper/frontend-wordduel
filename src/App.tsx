@@ -5,10 +5,13 @@ import DashboardPage from './pages/DashboardPage'
 import WaitingRoomPage from './pages/WaitingRoomPage'
 import GamePage from './pages/GamePage'
 import ResultPage from './pages/ResultPage'
+import SoloPage from './pages/SoloPage'
+import LibraryPage from './pages/LibraryPage'
+import AdminDashboardPage from './pages/AdminDashboardPage'
 import './index.css'
 
 // ─── Protected Route ──────────────────────────────────────────────────────────
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+function ProtectedRoute({ children, adminOnly = false }: { children: React.ReactNode; adminOnly?: boolean }) {
   const { user, isLoading } = useAuth()
 
   if (isLoading) {
@@ -16,7 +19,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-900)' }}>
         <div style={{ textAlign: 'center' }}>
           <span className="spinner" style={{ width: '40px', height: '40px', margin: '0 auto 16px', display: 'block' }} />
-          <p style={{ color: 'var(--text-muted)', fontFamily: 'Inter, sans-serif' }}>Đang tải...</p>
+          <p style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-body)' }}>Đang tải...</p>
         </div>
       </div>
     )
@@ -25,6 +28,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!user) {
     return <Navigate to="/login" replace />
   }
+  if (adminOnly && user.role !== 'admin') return <Navigate to="/dashboard" replace />
 
   return <>{children}</>
 }
@@ -73,6 +77,9 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      <Route path="/solo/:sessionId" element={<ProtectedRoute><SoloPage /></ProtectedRoute>} />
+      <Route path="/library" element={<ProtectedRoute><LibraryPage /></ProtectedRoute>} />
+      <Route path="/admin" element={<ProtectedRoute adminOnly><AdminDashboardPage /></ProtectedRoute>} />
       <Route path="/" element={<Navigate to={user ? '/dashboard' : '/login'} replace />} />
       <Route path="*" element={<Navigate to={user ? '/dashboard' : '/login'} replace />} />
     </Routes>

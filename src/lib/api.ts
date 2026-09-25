@@ -52,7 +52,7 @@ export interface ApiResponse<T> {
 export interface LoginPayload { username: string; password: string }
 export interface RegisterPayload { username: string; email: string; full_name: string; password: string }
 export interface TokenResponse { access_token: string; token_type: string }
-export interface UserInfo { id: number; username: string; email: string; full_name?: string }
+export interface UserInfo { id: number; username: string; email: string; full_name?: string; role?: 'user' | 'admin' }
 
 export const authApi = {
   register: (payload: RegisterPayload) =>
@@ -136,15 +136,32 @@ export function getApiErrorMessage(err: unknown): string {
 
 
 // ─── Word Sets & Words ────────────────────────────────────────────────────────
-export interface Word { id: number; term: string; definition: string; example?: string; word_set_id: number }
+export interface Word { id: number; term: string; definition: string; example?: string; context_sentence?: string; word_set_id: number }
 export interface WordSet { id: number; title: string; description?: string; creator_id?: number; word_count?: number; words?: Word[] }
-export interface WordSetCreate { title: string; description?: string; words: { term: string; definition: string; example?: string }[] }
+export interface WordSetCreate { title: string; description?: string; words: { term: string; definition: string; example?: string; context_sentence?: string }[] }
 
 export const wordApi = {
   listWordSets: () => api.get<{ data: WordSet[] }>('/word-sets'),
   createWordSet: (payload: WordSetCreate) => api.post<{ data: WordSet }>('/word-sets', payload),
   getWordSet: (id: number) => api.get<{ data: WordSet }>(`/word-sets/${id}`),
   deleteWordSet: (id: number) => api.delete(`/word-sets/${id}`),
+  previewImport: (file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return api.post<{ data: { rows: { word: string; definition: string; example?: string; context_sentence?: string }[]; valid_count: number; errors: { row: number; message: string }[] } }>(
+      '/word-sets/import/preview', body, { headers: { 'Content-Type': 'multipart/form-data' } },
+    )
+  },
+  importWordSet: (file: File, title: string, description: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('title', title)
+    if (description) body.append('description', description)
+    return api.post<{ data: { word_set: WordSet; imported_count: number; errors: { row: number; message: string }[] } }>(
+      '/word-sets/import', body, { headers: { 'Content-Type': 'multipart/form-data' } },
+    )
+  },
+  downloadImportTemplate: () => api.get('/word-sets/import/template', { responseType: 'blob' }),
 }
 
 
@@ -163,6 +180,9 @@ export interface Room {
   code: string
   host_id: number
   word_set_id: number
+  word_count: number | null
+  question_count: number | null
+  time_per_question: number | null
   status: 'waiting' | 'playing' | 'finished'
   created_at?: string
   finished_at?: string
@@ -170,13 +190,51 @@ export interface Room {
 }
 
 export const roomApi = {
-  create: (word_set_id: number) => api.post<{ data: Room }>('/rooms', { word_set_id }),
+  create: (word_set_id: number, settings: GameSettings = {}) => api.post<{ data: Room }>('/rooms', { word_set_id, ...settings }),
   join: (code: string) => api.post<{ data: Room }>(`/rooms/${code}/join`),
   get: (code: string) => api.get<{ data: Room }>(`/rooms/${code}`),
   gameState: (code: string) => api.get<{ data: Record<string, unknown> }>(`/rooms/${code}/game-state`),
   ready: (code: string) => api.post<{ data: { is_ready: boolean } }>(`/rooms/${code}/ready`),
   start: (code: string) => api.post<{ data: unknown }>(`/rooms/${code}/start`),
-  submit: (code: string, word_id: number, submitted_answer: string) =>
-    api.post<{ data: unknown }>(`/rooms/${code}/submit`, { word_id, submitted_answer }),
+  submit: (code: string, word_id: number, submitted_answer: string, question_index = 0) =>
+    api.post<{ data: unknown }>(`/rooms/${code}/submit`, { word_id, submitted_answer, question_index }),
   finish: (code: string) => api.post<{ data: unknown }>(`/rooms/${code}/finish`),
+  leave: (code: string) => api.post<{ data: { closed: boolean; host_id?: number } }>(`/rooms/${code}/leave`),
+}
+
+export interface GameSettings {
+  word_count?: number | null
+  time_per_question?: number | null
+  question_count?: number | null
+}
+
+export const soloApi = {
+  start: (payload: GameSettings & { source: 'word_set' | 'library'; word_set_id?: number }) =>
+    api.post<{ data: Record<string, unknown> }>('/solo/start', payload),
+  state: (sessionId: number) => api.get<{ data: Record<string, unknown> }>(`/solo/${sessionId}`),
+  submit: (sessionId: number, word_id: number, question_index: number, submitted_answer: string, response_time_ms: number) =>
+    api.post<{ data: Record<string, unknown> }>(`/solo/${sessionId}/submit`, { word_id, question_index, submitted_answer, response_time_ms }),
+}
+
+export interface SavedWord {
+  id: number
+  word_id: number
+  note: string | null
+  created_at: string
+  word: Word
+}
+
+export const libraryApi = {
+  list: (search = '') => api.get<{ data: SavedWord[] }>('/library', { params: search ? { search } : {} }),
+  save: (word_id: number, note?: string) => api.post<{ data: SavedWord }>('/library/save', { word_id, note }),
+  remove: (id: number) => api.delete(`/library/${id}`),
+}
+
+export const adminApi = {
+  users: (search = '') => api.get<{ data: { id: number; username: string; email: string; full_name: string; role: string; is_active: boolean }[] }>('/admin/users', { params: search ? { search } : {} }),
+  setUserStatus: (id: number, is_active: boolean) => api.patch(`/admin/users/${id}/status`, { is_active }),
+  wordSets: (search = '') => api.get<{ data: { id: number; title: string; creator_username?: string; word_count: number; is_hidden: boolean }[] }>('/admin/word-sets', { params: search ? { search } : {} }),
+  wordSet: (id: number) => api.get<{ data: { id: number; title: string; description?: string; is_hidden: boolean; words: { id: number; term: string; definition: string; example?: string; context_sentence?: string }[] } }>(`/admin/word-sets/${id}`),
+  setWordSetVisibility: (id: number, is_hidden: boolean) => api.patch(`/admin/word-sets/${id}`, { is_hidden }),
+  stats: () => api.get<{ data: { user_count: number; active_user_count: number; finished_room_count: number; word_set_count: number; popular_word_sets: { id: number; title: string; room_count: number }[] } }>('/admin/stats'),
 }

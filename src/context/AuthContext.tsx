@@ -12,6 +12,7 @@ import { authApi, type UserInfo } from '../lib/api'
 interface JwtPayload {
   sub: string
   exp: number
+  role?: 'user' | 'admin'
 }
 
 interface AuthContextType {
@@ -45,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       try {
         const decoded = jwtDecode<JwtPayload>(newToken)
-        setUser({ id: Number(decoded.sub), username: `user_${decoded.sub}`, email: '' })
+        setUser({ id: Number(decoded.sub), username: `user_${decoded.sub}`, email: '', role: decoded.role ?? 'user' })
       } catch {
         logout()
       }
@@ -72,7 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(res.data.data)
         } catch {
           // Token còn hạn, fallback user data
-          setUser({ id: Number(decoded.sub), username: `user_${decoded.sub}`, email: '' })
+          setUser({ id: Number(decoded.sub), username: `user_${decoded.sub}`, email: '', role: decoded.role ?? 'user' })
         }
       } catch {
         logout()

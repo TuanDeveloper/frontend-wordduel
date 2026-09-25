@@ -33,3 +33,7 @@ See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rule
 # Environment URLs
 
 Set `VITE_API_URL` to the full backend API base, including `/api/v1`, and set `VITE_WS_URL` to the backend WebSocket origin. The defaults use the current page's hostname and choose HTTPS/WSS when the frontend is served over HTTPS. See `.env.example` for a deployment example.
+
+## Local development
+
+Install dependencies with `npm ci`, then run `npm run dev`. The app includes duel rooms, solo practice, Excel/CSV word-set import, a personal saved-word library, and an administrator dashboard. Administrator links appear for accounts whose role is `admin`.
